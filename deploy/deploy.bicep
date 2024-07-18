@@ -12,13 +12,14 @@ param tags object = {}
 param sshAllowedSourceIp string
 param proxyVmUsername string = 'proxydebug'
 param proxyVmPublicKey string
+param logicAppArtifact string = 'https://raw.githubusercontent.com/ScottHolden/LogicAppHttpViaProxyExample/main/artifacts/proxy-logicapp.zip'
 
 var vnetAddressPrefix = '10.180.0.0/16'
 var logicAppSubnetName = 'LogicApp'
 var logicAppSubnetAddressPrefix = '10.180.10.0/24'
 var proxySubnetName = 'Proxy'
 var proxySubnetAddressPrefix = '10.180.11.0/24'
-var proxyStaticIp = cidrHost(logicAppSubnetAddressPrefix, 10)
+var proxyStaticIp = cidrHost(proxySubnetAddressPrefix, 10)
 
 var logicAppProxyUser = 'logicappuser'
 var logicAppProxyPass = 'TmvdUSs1_xAm4zO1QN4aa'
@@ -243,7 +244,7 @@ resource logicApp 'Microsoft.Web/sites@2023-12-01' = {
 
         { name: 'DEMO_PROXY_USER', value: logicAppProxyUser }
         { name: 'DEMO_PROXY_PASS', value: logicAppProxyPass }
-        { name: 'DMEO_PROXY_URL', value: 'http://${proxyStaticIp}:3128' }
+        { name: 'DEMO_PROXY_URL', value: 'http://${proxyStaticIp}:3128' }
       ]
     }
   }
@@ -257,6 +258,12 @@ resource logicApp 'Microsoft.Web/sites@2023-12-01' = {
     name: 'ftp'
     properties: {
       allow: false
+    }
+  }
+  resource MSDeploy 'extensions@2021-02-01' = if (!empty(trim(logicAppArtifact))) {
+    name: 'MSDeploy'
+    properties: {
+      packageUri: logicAppArtifact
     }
   }
 }
@@ -350,6 +357,7 @@ resource proxyVm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
   }
   resource customScript 'extensions' = {
     name: 'CustomScript'
+    location: location
     properties: {
       publisher: 'Microsoft.Azure.Extensions'
       type: 'CustomScript'
