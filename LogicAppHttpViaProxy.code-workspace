@@ -1,0 +1,16 @@
+{
+  "folders": [
+    {
+      "name": "Functions",
+      "path": "./DemoWorkflows/Function"
+    },
+    {
+      "name": "LogicApp",
+      "path": "./DemoWorkflows/LogicApp"
+    },
+    {
+      "name": "Deployment",
+      "path": "./deploy"
+    }
+  ]
+}
