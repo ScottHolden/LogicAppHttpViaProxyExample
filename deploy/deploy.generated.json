@@ -1,0 +1,451 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.28.1.47646",
+      "templateHash": "10593505091627943104"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for main resources."
+      }
+    },
+    "prefix": {
+      "type": "string",
+      "defaultValue": "proxy",
+      "minLength": 3,
+      "maxLength": 10,
+      "metadata": {
+        "description": "A prefix to add to the start of all resource names. Note: A \"unique\" suffix will also be added"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags to apply to all deployed resources"
+      }
+    },
+    "sshAllowedSourceIp": {
+      "type": "string"
+    },
+    "proxyVmUsername": {
+      "type": "string",
+      "defaultValue": "proxydebug"
+    },
+    "proxyVmPublicKey": {
+      "type": "string"
+    },
+    "logicAppArtifact": {
+      "type": "string",
+      "defaultValue": "https://raw.githubusercontent.com/ScottHolden/LogicAppHttpViaProxyExample/main/artifacts/proxy-logicapp.zip"
+    }
+  },
+  "variables": {
+    "vnetAddressPrefix": "10.180.0.0/16",
+    "logicAppSubnetName": "LogicApp",
+    "logicAppSubnetAddressPrefix": "10.180.10.0/24",
+    "proxySubnetName": "Proxy",
+    "proxySubnetAddressPrefix": "10.180.11.0/24",
+    "proxyStaticIp": "[cidrHost(variables('proxySubnetAddressPrefix'), 10)]",
+    "logicAppProxyUser": "logicappuser",
+    "logicAppProxyPass": "TmvdUSs1_xAm4zO1QN4aa",
+    "proxySetupScript": "[format('sudo apt -y update\r\nsudo apt -y install squid apache2-utils\r\n\r\nsudo htpasswd -bc /etc/squid/passwords {0} {1}\r\n\r\ncat > /etc/squid/squid.conf <<EOF\r\nauth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwords\r\nauth_param basic realm proxy\r\n\r\nacl localnet src {2}\r\nacl remote_test src {3}\r\nacl auth_users proxy_auth REQUIRED\r\n\r\nhttp_access allow localnet auth_users\r\nhttp_access allow remote_test auth_users\r\nhttp_access allow localhost\r\nhttp_access deny all\r\n\r\ninclude /etc/squid/conf.d/*.conf\r\n\r\nhttp_port 3128\r\ncoredump_dir /var/spool/squid\r\nEOF\r\n\r\nsudo systemctl restart squid\r\n', variables('logicAppProxyUser'), variables('logicAppProxyPass'), variables('vnetAddressPrefix'), parameters('sshAllowedSourceIp'))]",
+    "usablePrefix": "[toLower(trim(parameters('prefix')))]",
+    "uniqueSuffix": "[uniqueString(resourceGroup().id, parameters('prefix'))]",
+    "uniqueNameFormat": "[format('{0}-{{0}}-{1}', variables('usablePrefix'), variables('uniqueSuffix'))]",
+    "uniqueShortNameFormat": "[format('{0}{{0}}{1}', variables('usablePrefix'), variables('uniqueSuffix'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-04-01",
+      "name": "[format('{0}/{1}/{2}', take(format(variables('uniqueShortNameFormat'), 'st'), 24), 'default', format('app-package-{0}', format(variables('uniqueNameFormat'), 'func')))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', take(format(variables('uniqueShortNameFormat'), 'st'), 24))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', format(variables('uniqueNameFormat'), 'logicapp'), 'scm')]",
+      "properties": {
+        "allow": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format(variables('uniqueNameFormat'), 'logicapp'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', format(variables('uniqueNameFormat'), 'logicapp'), 'ftp')]",
+      "properties": {
+        "allow": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format(variables('uniqueNameFormat'), 'logicapp'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(trim(parameters('logicAppArtifact'))))]",
+      "type": "Microsoft.Web/sites/extensions",
+      "apiVersion": "2021-02-01",
+      "name": "[format('{0}/{1}', format(variables('uniqueNameFormat'), 'logicapp'), 'MSDeploy')]",
+      "properties": {
+        "packageUri": "[parameters('logicAppArtifact')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format(variables('uniqueNameFormat'), 'logicapp'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}/{1}', format(variables('uniqueNameFormat'), 'vm'), 'CustomScript')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "publisher": "Microsoft.Azure.Extensions",
+        "type": "CustomScript",
+        "typeHandlerVersion": "2.1",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "script": "[base64(variables('proxySetupScript'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', format(variables('uniqueNameFormat'), 'vm'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[format(variables('uniqueNameFormat'), 'proxy-nsg')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-ExternalProxy-SSH",
+            "properties": {
+              "priority": 100,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourceAddressPrefix": "[parameters('sshAllowedSourceIp')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "22"
+            }
+          },
+          {
+            "name": "Allow-ExternalProxy-Proxy",
+            "properties": {
+              "priority": 300,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourceAddressPrefix": "[parameters('sshAllowedSourceIp')]",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "3128"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-11-01",
+      "name": "[format(variables('uniqueNameFormat'), 'vnet')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('vnetAddressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('logicAppSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('logicAppSubnetAddressPrefix')]",
+              "privateEndpointNetworkPolicies": "Disabled",
+              "privateLinkServiceNetworkPolicies": "Enabled",
+              "delegations": [
+                {
+                  "name": "delegation",
+                  "properties": {
+                    "serviceName": "Microsoft.Web/serverfarms"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "[variables('proxySubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('proxySubnetAddressPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format(variables('uniqueNameFormat'), 'proxy-nsg'))]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', format(variables('uniqueNameFormat'), 'proxy-nsg'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2022-10-01",
+      "name": "[format(variables('uniqueNameFormat'), 'logs')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "retentionInDays": 30,
+        "sku": {
+          "name": "PerGB2018"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02-preview",
+      "name": "[format(variables('uniqueNameFormat'), 'insights')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "web",
+      "properties": {
+        "Application_Type": "web",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format(variables('uniqueNameFormat'), 'logs'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format(variables('uniqueNameFormat'), 'logs'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-04-01",
+      "name": "[take(format(variables('uniqueShortNameFormat'), 'st'), 24)]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "StorageV2",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "properties": {
+        "allowBlobPublicAccess": false,
+        "defaultToOAuthAuthentication": true,
+        "supportsHttpsTrafficOnly": true,
+        "minimumTlsVersion": "TLS1_2"
+      }
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2023-12-01",
+      "name": "[format(variables('uniqueNameFormat'), 'logicapp')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "tier": "WorkflowStandard",
+        "name": "WS1"
+      },
+      "properties": {
+        "maximumElasticWorkerCount": 3,
+        "zoneRedundant": false
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2023-12-01",
+      "name": "[format(variables('uniqueNameFormat'), 'logicapp')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "functionapp,workflowapp",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format(variables('uniqueNameFormat'), 'logicapp'))]",
+        "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', format(variables('uniqueNameFormat'), 'vnet'), variables('logicAppSubnetName'))]",
+        "vnetRouteAllEnabled": true,
+        "httpsOnly": true,
+        "clientAffinityEnabled": false,
+        "siteConfig": {
+          "use32BitWorkerProcess": false,
+          "ftpsState": "FtpsOnly",
+          "netFrameworkVersion": "v6.0",
+          "appSettings": [
+            {
+              "name": "APP_KIND",
+              "value": "workflowApp"
+            },
+            {
+              "name": "AzureFunctionsJobHost__extensionBundle__id",
+              "value": "Microsoft.Azure.Functions.ExtensionBundle.Workflows"
+            },
+            {
+              "name": "AzureFunctionsJobHost__extensionBundle__version",
+              "value": "[1.*, 2.0.0)"
+            },
+            {
+              "name": "FUNCTIONS_EXTENSION_VERSION",
+              "value": "~4"
+            },
+            {
+              "name": "FUNCTIONS_WORKER_RUNTIME",
+              "value": "node"
+            },
+            {
+              "name": "WEBSITE_NODE_DEFAULT_VERSION",
+              "value": "~18"
+            },
+            {
+              "name": "AzureWebJobsStorage",
+              "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1};EndpointSuffix=core.windows.net', take(format(variables('uniqueShortNameFormat'), 'st'), 24), listKeys(resourceId('Microsoft.Storage/storageAccounts', take(format(variables('uniqueShortNameFormat'), 'st'), 24)), '2023-04-01').keys[0].value)]"
+            },
+            {
+              "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
+              "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1};EndpointSuffix=core.windows.net', take(format(variables('uniqueShortNameFormat'), 'st'), 24), listKeys(resourceId('Microsoft.Storage/storageAccounts', take(format(variables('uniqueShortNameFormat'), 'st'), 24)), '2023-04-01').keys[0].value)]"
+            },
+            {
+              "name": "WEBSITE_CONTENTSHARE",
+              "value": "[format(variables('uniqueShortNameFormat'), 'logicapp')]"
+            },
+            {
+              "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+              "value": "[reference(resourceId('Microsoft.Insights/components', format(variables('uniqueNameFormat'), 'insights')), '2020-02-02-preview').ConnectionString]"
+            },
+            {
+              "name": "DEMO_PROXY_USER",
+              "value": "[variables('logicAppProxyUser')]"
+            },
+            {
+              "name": "DEMO_PROXY_PASS",
+              "value": "[variables('logicAppProxyPass')]"
+            },
+            {
+              "name": "DEMO_PROXY_URL",
+              "value": "[format('http://{0}:3128', variables('proxyStaticIp'))]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', format(variables('uniqueNameFormat'), 'insights'))]",
+        "[resourceId('Microsoft.Web/serverfarms', format(variables('uniqueNameFormat'), 'logicapp'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', take(format(variables('uniqueShortNameFormat'), 'st'), 24))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', format(variables('uniqueNameFormat'), 'vnet'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-11-01",
+      "name": "[format(variables('uniqueNameFormat'), 'pip')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "Standard",
+        "tier": "Regional"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static"
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2023-09-01",
+      "name": "[format(variables('uniqueNameFormat'), 'nic')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', format(variables('uniqueNameFormat'), 'vnet'), variables('proxySubnetName'))]"
+              },
+              "privateIPAllocationMethod": "Static",
+              "privateIPAddress": "[variables('proxyStaticIp')]",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', format(variables('uniqueNameFormat'), 'pip'))]"
+              }
+            }
+          }
+        ],
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format(variables('uniqueNameFormat'), 'proxy-nsg'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', format(variables('uniqueNameFormat'), 'proxy-nsg'))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', format(variables('uniqueNameFormat'), 'pip'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', format(variables('uniqueNameFormat'), 'vnet'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2024-03-01",
+      "name": "[format(variables('uniqueNameFormat'), 'vm')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "Standard_D2s_v3"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "0001-com-ubuntu-server-jammy",
+            "sku": "22_04-lts-gen2",
+            "version": "latest"
+          },
+          "osDisk": {
+            "createOption": "FromImage"
+          }
+        },
+        "osProfile": {
+          "computerName": "[parameters('proxyVmUsername')]",
+          "adminUsername": "[parameters('proxyVmUsername')]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": true,
+            "ssh": {
+              "publicKeys": [
+                {
+                  "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('proxyVmUsername'))]",
+                  "keyData": "[parameters('proxyVmPublicKey')]"
+                }
+              ]
+            }
+          }
+        },
+        "securityProfile": {
+          "uefiSettings": {
+            "secureBootEnabled": true,
+            "vTpmEnabled": true
+          },
+          "securityType": "TrustedLaunch"
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', format(variables('uniqueNameFormat'), 'nic'))]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', format(variables('uniqueNameFormat'), 'nic'))]"
+      ]
+    }
+  ]
+}
